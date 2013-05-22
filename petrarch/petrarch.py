@@ -2,7 +2,7 @@ import nltk as nk
 import preprocess
 import itertools
 import argparse
-from joblib import Parallel, delayed
+from IPython.parallel import Client
 
 #Chunker code pulled from
 #http://streamhacker.wordpress.com/2009/02/23/chunk-extraction-with-nltk/
@@ -171,7 +171,7 @@ def _get_vp(tree):
     return verb_phrases
 
 
-def parse_sent(sent, key, input_chunker):
+def parse_sent(sent, event_dict, key, input_chunker):
     """
     Function to parse a given sentence. Tokenizes, POS tags, and chunks a
     given sentence, along with extracting noun and verb phrases.
@@ -197,7 +197,9 @@ def parse_sent(sent, key, input_chunker):
                     in the input file.
 
     """
+    import nltk as nk
     sub_event_dict = {key: {}}
+    sent = event_dict[key]['sent']
     #Tokenize the words
     toks = nk.word_tokenize(sent)
     #Part-of-speech tag the tokens
@@ -251,7 +253,7 @@ def post_process(sent, key, username):
     return sub_event_dict
 
 
-def parse(event_dict, input_chunker, username, process2=False):
+def parse(event_dict, input_chunker, ip_cluster, username, process2=False):
     """
     Function that calls the `parse_sent` function in parallel. Helper
     function to make calling the necessary functions cleaner.
@@ -271,12 +273,13 @@ def parse(event_dict, input_chunker, username, process2=False):
     This is the function that should be called directly in a script.
 
     """
-    parsed = Parallel(n_jobs=-1)(delayed(parse_sent)
-                                 (sent=event_dict[key]['story'], key=key,
-                                  input_chunker=input_chunker)
-                                 for key in event_dict)
+    keys = [key for key in event_dict]
+    gather = ip_cluster.map_async(parse_sent, event_dict, 
+                                  keys, input_chunker=input_chunker)
+    results = gather.get()
 
-    for parsed_sent in parsed:
+
+    for parsed_sent in results:
         key = parsed_sent.keys()[0]
         event_dict[key].update(parsed_sent[key])
 
@@ -325,7 +328,10 @@ if __name__ == '__main__':
     ubt_chunker = create_chunkers() 
     print 'Parsing sentences...'
     events = read_data(inputs)
-    parse(events, ubt_chunker, username, post_proc)
+    cluster = Client(packer='pickle')
+    nodes = cluster[:]
+    print nodes 
+    parse(events, ubt_chunker, cluster, username, post_proc)
     for event in events:
         print '=======================\n'
         print 'event id: {}\n'.format(event)
